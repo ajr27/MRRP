@@ -30,7 +30,7 @@ Data.Medicare.gov data can be downloaded as flat files or through the Socrata Op
 # ghi_data <- read.socrata("https://data.medicare.gov/resource/rbry-mqwu.json")
 # write_rds(ghi_data, "ghi_data.rds")
 
-
+# Using the data that were saved above as pulling from the API will take longer.
 hrrp_data <- read_rds("hrrp_data.rds")
 ghi_data <- read_rds("ghi_data.rds")
 ```
@@ -47,11 +47,17 @@ Next we'll look at the variables and corresponding classes of the hospital data
 
 ```{r ghi_data_view, echo=FALSE}
 # GHI data
+# Get the class of each variable
 sapply(ghi_data, class) %>% 
-  data.frame %>% 
-  rownames_to_column("variable") %>% 
-  set_names(c("variable", "class")) %>% 
-  select(variable, class) %>%
+  
+  # Convert the named vector into a 1-column dataframe and name the column
+  # "class"
+  data.frame(class = .) %>% 
+  
+  # Put the row names of the dataframe into a new column called "variable"
+  rownames_to_column("variable") %>%
+  
+  # Print the results to the console
   print
 ```
 
@@ -78,7 +84,8 @@ hrrp_data <- hrrp_data %>%
       str_replace_all("-HRRP", "") %>% as_factor
   ) %>%
   
-  # Convert quantitative variables to numeric data type
+  # Convert quantitative variables to numeric data type. This will turn any non-
+  # numeric entries, such as "Not Available" into missing values.
   mutate_at(
     vars(
       expected, predicted, readm_ratio, number_of_discharges, 
@@ -142,10 +149,13 @@ ghi_hrrp <- ghi_data %>%
 First we'll look at the distribution of readmission ratios across the different conditions.
 
 ```{r dist_viz, echo=FALSE}
+# Generate a violin plot using the merged data
 ghi_hrrp %>%
-    select(measure_id, readm_ratio) %>%
     ggplot(aes(measure_id, readm_ratio, fill = measure_id)) +
     geom_violin() +
+  
+    # Remove x-axis labeling elements as the groups will be colored by the 
+    # measure-id and a legend will be included
     theme(
       axis.text.x = element_blank(),
       axis.ticks.x = element_blank(),
@@ -153,12 +163,15 @@ ghi_hrrp %>%
       legend.position = "top",
       plot.title = element_text(hjust = 0.5)
     ) +
+  
+    # Add a title to the plot
     ggtitle("Readmission ratio by condition")
 ```
 
-It appears that the distributions of readmission ratios for the different conditions are fairly similar to one another except for hip/knee replacements and coronary artery bypass grafting, which have much wider distributions. Below we can look at the distribution of readmission ratios by condition and ownership, overall_rating, or emergency_services by selecting a feature from the drop-down menu.
+It appears that the distributions of readmission ratios for the different conditions are fairly similar to one another except for hip/knee replacements and coronary artery bypass grafting, which have much wider distributions. Below we can look at the distribution of readmission ratios by condition and ownership, overall_rating, or emergency_services by selecting a feature from the drop-down menu using an embedded Shiny app.
 
 ```{r dist_viz_by_feature, echo=FALSE}
+# Create the dropdown menu using the feature variable names as choices
 selectInput(
   "feature",
   label = "Choose a hospital feature",
@@ -166,6 +179,8 @@ selectInput(
   selected = "ownership"
 )
 
+# Generate the interactive plot using the same plot features as in the static 
+# plot above
 renderPlot({
   ghi_hrrp %>%
     select(one_of(input$feature), measure_id, readm_ratio) %>%
@@ -191,24 +206,34 @@ It appears that distributions are also different across the different levels of 
 The first step in performing a statistical analysis is understanding the variance across groups. Below is a table showing the counts and mean readmission ratios by overall_rating and condition.
 
 ```{r count_mean, echo=TRUE}
+# Group the merged data by hospital overall rating and condition
 ghi_hrrp %>%
   group_by(overall_rating, measure_id) %>%
+  
+  # Generate a count and a mean for each group
   summarise(
     count = n(),
     avg_rr = mean(readm_ratio, na.rm = T)
   ) %>%
+  
+  # Convert it to a dataframe so that the entire table prints to the console
   data.frame %>%
+  
+  # Print the table to the console
   print
 ```
 
 It appears that the ratio of predicted readmissions to expected readmissions generally decreases as the overall rating increase. The next step is to determine whether the variance is homogenous across all groups, however, having such a small number of observations with a missing overall rating could skew this measure, so we'll exclude these observations from the remainder of the analysis. To determine whether the variance is homogenous we'll use Levene's test.
 
+```{r clean_rating}
+# Drop observations with missing overall rating data
+ghi_hrrp <- ghi_hrrp %>%
+  filter(!is.na(overall_rating))
+```
+
 First we'll look at the results of Levene's tests for the overall_rating variable and the measure_id variables separately.
 
 ```{r lev_test_rating, echo=FALSE}
-ghi_hrrp <- ghi_hrrp %>%
-  filter(!is.na(overall_rating))
-
 leveneTest(
   readm_ratio ~ overall_rating, data = ghi_hrrp
 ) %>%
@@ -236,29 +261,39 @@ Given that the p-value on Levene's test is less than .05, we can reject the null
 First, we'll determine whether the interaction is significant.
 
 ```{r run_f_test, echo=FALSE}
+# Run ANOVA including both variables, but not their interaction
 anova_no_int <- aov(readm_ratio ~ overall_rating + measure_id, data = ghi_hrrp)
+
+# Run ANOVA with the interaction
 anova_int <- aov(readm_ratio ~ overall_rating * measure_id, data = ghi_hrrp)
+
+# Run the ANOVA on both of the above analyses to get an F-test
 anova(anova_int, anova_no_int)
 ```
 
 Given that the F-test of the interaction model against the model without an interaction has a p-value of less than .05, we can conclude that the interaction has a significant effect on the variance across all the groups. But, because the variances across the groups are heterogeneous, we must run an ANOVA for an unbalanced sample, or a "type III" ANOVA. However, before runing that analysis it might be good to look at the normality of the residuals from the ANOVA including the interaction term to be thorough even though moderate deviations of normality wouldn't affect an ANOVA too badly. We'll run a Komogorov-Smirnov (KS) test because a Shapiro-Wilk test (the usual test) in R can only handle 5000 observations where we have `r nrow(ghi_hrrp)`.
 
 ```{r norm_check, echo=FALSE, warning=FALSE}
+
+# Store the residuals of the ANOVA that includes the interaction
 anova_res <- residuals(anova_int)
 
+# Run a two-sided Komogorov-Smirnov test on the residuals to check normality
 ks.test(anova_res, y = "pnorm", alternative = "two.sided") %>% print
 
+# Generate a normaility plot of the residuals
 ggplot(data = anova_res %>% tibble(res = .), aes(sample = res)) +
   geom_qq() +
   geom_qq_line() +
   ggtitle("Normality plot of residuals from ANOVA with interaction")
 
+# Generate a histogram of the residuals
 ggplot(data = anova_res %>% tibble(res = .), aes(res)) +
   geom_histogram(bins = 200) +
   ggtitle("Histogram of residuals from ANOVA with interaction")
 ```
 
-Both the KS test and the QQ plot indicate that there is non-normality in our residuals. However, a histogram shows that the residuals are fairly normally distributed. The QQ plot shows the normality is violated mainly at the extremes of the readmission ratio, or in the tails of the distribution. We can see, for example, that the distribution is right-skewed. For expediency we'll continue with the analysis knowing that there is a only a slight risk of false negatives in the ANOVA.
+Both the KS test and the QQ plot indicate that there is non-normality in our residuals. However, a histogram shows that the residuals are fairly normally distributed. The QQ plot shows the normality is violated mainly at the upper extreme of the readmission ratio, or in the right tail of the distribution. We can see, for example, that the distribution is right-skewed in the histogram. For expediency we'll continue with the analysis knowing that there is a only a slight risk of false negatives in the ANOVA rather than removing outliers or transforming the data.
 
 ```{r run_anova, echo=FALSE}
 Anova(anova_int, type = "III")
@@ -267,16 +302,27 @@ Anova(anova_int, type = "III")
 The ANOVA adjusting for an unbalanced sample indicates that overall rating, the condition, and their interaction all affect the readmission ratio. We'll now look at an interaction plot for this analysis.
 
 ```{r int_plot, echo=FALSE}
+# Group the merged data by overall rating and condition
 ghi_hrrp %>%
   group_by(overall_rating, measure_id) %>%
+  
+  # Get a count, mean, and standard error of readmission rates for each group
   summarise(
     count = n(),
     avg_rr = mean(readm_ratio),
-    se = sd(readm_ratio) / sqrt(count),
-    upper = avg_rr + se,
-    lower = avg_rr - se
+    se = sd(readm_ratio) / sqrt(count)
   ) %>%
+  
+  # Ungroup the tibble. This may not be necessary, but the grouped structure can
+  # sometimes cause trougle with other functions.
   ungroup %>%
+  
+  # Create upper and lower bounds using 2 standard errors to correspond with a 
+  # 95% confidence interval
+  mutate(upper = avg_rr + (2 * se), lower = avg_rr - (2 * se)) %>%
+  
+  # Plot lines and dots at the mean response ratio of each condition by
+  # overall rating and add error bars
   ggplot(aes(measure_id, avg_rr, group = overall_rating)) +
   geom_line(aes(color = overall_rating)) +
   geom_point(aes(color = overall_rating)) +
@@ -284,13 +330,23 @@ ghi_hrrp %>%
     aes(ymin = lower, ymax = upper, color = overall_rating), 
     width = 0.3
   ) +
-  ggtitle("Interaction plot: condition and overall rating")
+  
+  # Add a plot title and caption indicating the confidence interval of the
+  # error bars
+  labs(
+    title = "Interaction plot: condition and overall rating",
+    caption = 
+      "Error bars account for (2 * SE) of the distribution around each mean"
+  )
 ```
 
-This plot confirms our previous conclusion that overall rating is related to the readmission ratio, however, the interaction only appears statistically significant for hip/knee hospitalizations between hospitals with overall ratings of 1 and 2. To check this we can run a Tukey Honest Significant Differences analysis. Because there would be over 200 rows in this analysis, we'll look at a table of the ratio of differences that are significant at the 95% confidence level.
+This plot confirms our previous conclusion that overall rating is related to the readmission ratio, however, the interaction only appears statistically significant for hip/knee hospitalizations between hospitals with overall ratings of 1 and 2 and across all groups for coronary artery bypass grafting (CABG). To check this we can run a Tukey Honest Significant Differences analysis. Because there would be over 200 rows in this analysis, we'll look at a table of the ratio of differences that are significant at the 95% confidence level.
 
 ```{r tukey, echo=FALSE}
+# Store a Tukey Honest Significant Differences object
 tukey_int <- TukeyHSD(anova_int)
+
+# Get the ratio of significant interactions for each group of interactions
 tukey_signif <- tukey_int %>%
   map(
     ~ .x %>% 
@@ -304,4 +360,4 @@ tukey_signif <- tukey_int %>%
 print(tukey_signif)
 ```
 
-All of the pairwise differences of the categories of overall ratings are statistically significant, 26.7% of the pairwise differences of the categories of overall ratings are statistically significant, and 63.2% of the pairwise differences of the categories of overall ratings are statistically significant. This suggests that the condition may be as important in determining the variance in readmission ratios.
+`r tukey_signif$overall_rating %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant, `r tukey_signif$measure_id %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant, and `r tukey_signif$interaction %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant. This suggests that the condition may not be important in determining the variance in readmission ratios, but the overall rating and its interaction with the condition are important.
