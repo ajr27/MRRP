@@ -8,7 +8,7 @@ date: "`r format(Sys.time(), '%d %B, %Y')`"
 
 ```{r load_pkgs, include=FALSE}
 # Install packages if necessary
-pkgs <- c("RSocrata", "scales", "shiny", "car", "tidyverse")
+pkgs <- c("RSocrata", "scales", "shiny", "car", "sp", "leaflet", "tidyverse")
 lapply(pkgs, function(p) if (!p %in% installed.packages()) install.packages(p))
 
 # Load required packages
@@ -122,19 +122,32 @@ ghi_data <- ghi_data %>%
       ends_with("_nc")
     ),
     funs(as_factor)
+  ) %>% 
+  
+  # Extract longitude and latitude from the "location.coordinates" variable
+  separate(location.coordinates, c("long", "lat"), sep = ",") %>% 
+  mutate_at(
+    vars(long, lat), 
+    funs(
+      str_replace(., "[\\(|\\)]", "") %>% str_replace("c", "") %>% as.numeric
+    )
   ) %>%
   
-  # Extract longitude and latitude from the "location.coordinates" variable and
-  # reorder the overall rating variable from 1 to 5
+  # Reorder the overall rating variable from 1 to 5
   mutate(
-    long = location.coordinates %>% unlist %>% `[`(1),
-    lat = location.coordinates %>% unlist %>% `[`(2),
+    # long = map_dbl(
+    #   location.coordinates,
+    #   ~ .x[1][[1]][[1]][[1]]
+    # ),
+    # lat = map_dbl(
+    #   location.coordinates,
+    #   ~ .x %>% unlist %>% `[[`(2)
+    # ),
     overall_rating = fct_relevel(overall_rating, as.character(1:5))
   ) %>%
   
   # Keep only Acute care hospitals and exclude all hospitals in Maryland.
-  filter(type %in% "Acute Care Hospitals", !state %in% "MD") %>%
-  select(-location.coordinates)
+  filter(type %in% "Acute Care Hospitals", !state %in% "MD")
 
 # Merge the datasets
 ghi_hrrp <- ghi_data %>%
@@ -361,3 +374,47 @@ print(tukey_signif)
 ```
 
 `r tukey_signif$overall_rating %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant, `r tukey_signif$measure_id %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant, and `r tukey_signif$interaction %>% pull(pct_signif)` of the pairwise differences of the categories of overall ratings are statistically significant. This suggests that the condition may not be important in determining the variance in readmission ratios, but the overall rating and its interaction with the condition are important.
+
+# Visualization of geographical distribution of COPD readmission rates
+
+Below is leaflet map showing all of the hospitals in the Readmission Rate Reduction Program that had knee/hip readmissions by color: red if the readmission ratio was 1 or above and navy otherwise.
+
+```{r geo_dist, echo=FALSE, warning=FALSE}
+# Filter the merged data for COPD readmission ratios in observations with 
+# geographical coordinates and add a column indicating whether the ratio is High
+# or Low
+copd <- ghi_hrrp %>%
+  select(lat, long, readm_ratio, name, measure_id) %>%
+  filter(measure_id == "COPD", !is.na(lat), !is.na(long)) %>%
+  mutate(ratio_lev = ifelse(readm_ratio >= 1, "Hi", "Lo") %>% as.factor)
+
+# Create a spatial dataframe of the hospital coordinates and other values for 
+# the map
+copd_geo <- SpatialPointsDataFrame(
+  cbind(copd$long, copd$lat), 
+  data.frame(
+    ratio_lev = copd$ratio_lev, readm_ratio = copd$readm_ratio,
+    name = copd$name
+  )
+)
+
+# Make a color palette of red for Hi ratios and navy for Lo ratios
+cols <- colorFactor(c("red", "navy"), copd$ratio_lev)
+
+# Generate the map
+leaflet(data = copd_geo) %>%
+  addTiles() %>%
+  
+  # Set the center of the map and the zoom level
+  setView(-98.5795, 39.8283, zoom = 2) %>%
+  
+  # Add the markers colored based on whether the given hospital ratio's was high
+  # or low and add a label that shows the hospital name and its readmission
+  # ratio
+  addCircleMarkers(
+    radius = 1,
+    color = ~cols(ratio_lev),
+    opacity = 0.5,
+    label = ~paste(name, "-", readm_ratio)
+  )
+```
