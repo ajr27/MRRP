@@ -1,0 +1,6 @@
+1. clean data
+2. Box plots for all variables against readmission rate
+3. Create interactive plot testing both homogeneity assumption and normality assumption
+4. One-way ANOVA for all categorical variables
+5. Do pairwise comparisons (Tukey) for 3 variables with high correlations
+6. Select any two variables and do two-way ANOVA analysis

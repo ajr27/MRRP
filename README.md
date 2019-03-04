@@ -3,6 +3,8 @@ title: "ReadMe"
 output: html_notebook
 author: Arcenis Rojas
 date: "`r format(Sys.time(), '%d %B, %Y')`"
+editor_options: 
+  chunk_output_type: inline
 ---
 
 # Introduction

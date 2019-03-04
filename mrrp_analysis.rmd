@@ -1,0 +1,307 @@
+---
+title: "Medicare Readmission Rate Analysis"
+output: html_document
+runtime: shiny
+author: Arcenis Rojas
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r load_pkgs, include=FALSE}
+# Install packages if necessary
+pkgs <- c("RSocrata", "scales", "shiny", "car", "tidyverse")
+lapply(pkgs, function(p) if (!p %in% installed.packages()) install.packages(p))
+
+# Load required packages
+lapply(pkgs, require, character.only = TRUE)
+```
+
+# Introduction
+This analysis will consider the differences in Medicare readmission rates among hospitals across the U.S. Data from the project will come from the Data.Medicare.gove portal, which is an open data repository. Analyses will consist of various statistical tests and visualizations with a focus on the differences in distribution of readmission rates by hospital characteristics such as hospital type and ownership. More specifically, the focus will be on excess readmissions, which are determined by the ratio of their "predicted" readmissions within a 30-day period to their "expected" readmissions in the same period. "Expected" readmissions are determined by the mean number of readmissions for a given type of hospital stay for hospitals within a peer group.
+
+# Data retrieval, exploration, and cleaning
+Data.Medicare.gov data can be downloaded as flat files or through the Socrata Open Data API (SODA). The two files needed for this analysis are the Hospital Readmissions Reduction Program (HRRP) data and the General Hospital Information (GHI) data.
+
+```{r dl_data}
+# Read in the readmission data via SODA using the RSocrata package
+# hrrp_data <- read.socrata("https://data.medicare.gov/resource/kac9-a9fp.json")
+# write_rds(hrrp_data, "hrrp_data.rds")
+
+# Read in the general hospital information data
+# ghi_data <- read.socrata("https://data.medicare.gov/resource/rbry-mqwu.json")
+# write_rds(ghi_data, "ghi_data.rds")
+
+
+hrrp_data <- read_rds("hrrp_data.rds")
+ghi_data <- read_rds("ghi_data.rds")
+```
+
+
+First we'll look at the structure of the Readmission data
+
+```{r hrrp_str, echo=FALSE}
+# HRRP data
+str(hrrp_data)
+```
+
+Next we'll look at the variables and corresponding classes of the hospital data
+
+```{r ghi_data_view, echo=FALSE}
+# GHI data
+sapply(ghi_data, class) %>% 
+  data.frame %>% 
+  rownames_to_column("variable") %>% 
+  set_names(c("variable", "class")) %>% 
+  select(variable, class) %>%
+  print
+```
+
+In the readmission data we are primarily interested in the expected and predicted readmission rates and the readmission ratio, so we'll keep those along with the provider ID and measure ID, which correspond to the different types of medical procedures for which readmission rates are computed. We'll also change the data types as necessary.
+
+The GHI data has a large number of footnote variables that each corresponds to a national comparison measure. We'll keep the national comparison measures, but not the footnotes, and also keep the provider ID and other variables that will be used for the comparison. We'll also clean up the variable names and some of the data value labels and change the data types as necessary. We'll also only keep acute care hospitals that are not in Maryland given that most other types of hospitals and all hospitals in Maryland are exempt and, therefore, do not have readmission rate data.
+
+Finally, I'll merge the datasets on "provider_id."
+
+```{r clean_data, warning=FALSE}
+# Clean up the readmission data
+hrrp_data <- hrrp_data %>%
+  
+  # Keep only necessary variables
+  select(
+    provider_id, measure_id, expected, predicted, readm_ratio, 
+    number_of_discharges, number_of_readmissions
+  ) %>%
+  
+  # Keep only the important parts of the measure ID label names and convert it
+  # to a factor variable
+  mutate(
+    measure_id = str_replace_all(measure_id, "^READM-30-", "") %>%
+      str_replace_all("-HRRP", "") %>% as_factor
+  ) %>%
+  
+  # Convert quantitative variables to numeric data type
+  mutate_at(
+    vars(
+      expected, predicted, readm_ratio, number_of_discharges, 
+      number_of_readmissions
+    ),
+    funs(as.numeric)
+  )
+
+# Clean up the hospital information data
+ghi_data <- ghi_data %>%
+  
+  # Keep only the necessary variables
+  select(
+    provider_id, hospital_name, state, city, county = "county_name",
+    emergency_services, hospital_overall_rating, hospital_ownership, 
+    hospital_type, location.coordinates, ends_with("national_comparison")
+  ) %>%
+  
+  # Clean up the variable names
+  set_names(
+    names(.) %>% str_replace_all("hospital_", "") %>% 
+      str_replace_all("national_comparison", "nc")
+  ) %>%
+  
+  # Replace all the values of "Not Available" with NA
+  mutate_all(
+    funs(replace(., . == "Not Available", NA_character_))
+  ) %>%
+  
+  # Covert all categorical variables to factor
+  mutate_at(
+    vars(
+      emergency_services, overall_rating, ownership, type, 
+      ends_with("_nc")
+    ),
+    funs(as_factor)
+  ) %>%
+  
+  # Extract longitude and latitude from the "location.coordinates" variable and
+  # reorder the overall rating variable from 1 to 5
+  mutate(
+    long = location.coordinates %>% unlist %>% `[`(1),
+    lat = location.coordinates %>% unlist %>% `[`(2),
+    overall_rating = fct_relevel(overall_rating, as.character(1:5))
+  ) %>%
+  
+  # Keep only Acute care hospitals and exclude all hospitals in Maryland.
+  filter(type %in% "Acute Care Hospitals", !state %in% "MD") %>%
+  select(-location.coordinates)
+
+# Merge the datasets
+ghi_hrrp <- ghi_data %>%
+  left_join(hrrp_data, by = "provider_id") %>%
+  
+  # Exclude any observations with a missing measure_id.
+  filter(!is.na(readm_ratio))
+```
+
+# Visualizing the distribution of readmission ratios
+
+First we'll look at the distribution of readmission ratios across the different conditions.
+
+```{r dist_viz, echo=FALSE}
+ghi_hrrp %>%
+    select(measure_id, readm_ratio) %>%
+    ggplot(aes(measure_id, readm_ratio, fill = measure_id)) +
+    geom_violin() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.position = "top",
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    ggtitle("Readmission ratio by condition")
+```
+
+It appears that the distributions of readmission ratios for the different conditions are fairly similar to one another except for hip/knee replacements and coronary artery bypass grafting, which have much wider distributions. Below we can look at the distribution of readmission ratios by condition and ownership, overall_rating, or emergency_services by selecting a feature from the drop-down menu.
+
+```{r dist_viz_by_feature, echo=FALSE}
+selectInput(
+  "feature",
+  label = "Choose a hospital feature",
+  choices = c("ownership", "overall_rating", "emergency_services"),
+  selected = "ownership"
+)
+
+renderPlot({
+  ghi_hrrp %>%
+    select(one_of(input$feature), measure_id, readm_ratio) %>%
+    set_names(c("feature", "measure_id", "readm_ratio")) %>%
+    ggplot(aes(measure_id, readm_ratio, fill = measure_id)) +
+    geom_violin() +
+    facet_wrap(~ feature, drop = TRUE, scales = "free") +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      legend.position = "top",
+      plot.title = element_text(hjust = 0.5)
+    ) +
+    ggtitle(paste("Readmission ratio by", input$feature, "and condition"))
+})
+```
+
+It appears that distributions are also different across the different levels of overall_rating. In the next section we'll poerform analyses of variance in readmission ratios by condition and overall_rating.
+
+# Analyses of variance (ANOVA)
+
+The first step in performing a statistical analysis is understanding the variance across groups. Below is a table showing the counts and mean readmission ratios by overall_rating and condition.
+
+```{r count_mean, echo=TRUE}
+ghi_hrrp %>%
+  group_by(overall_rating, measure_id) %>%
+  summarise(
+    count = n(),
+    avg_rr = mean(readm_ratio, na.rm = T)
+  ) %>%
+  data.frame %>%
+  print
+```
+
+It appears that the ratio of predicted readmissions to expected readmissions generally decreases as the overall rating increase. The next step is to determine whether the variance is homogenous across all groups, however, having such a small number of observations with a missing overall rating could skew this measure, so we'll exclude these observations from the remainder of the analysis. To determine whether the variance is homogenous we'll use Levene's test.
+
+First we'll look at the results of Levene's tests for the overall_rating variable and the measure_id variables separately.
+
+```{r lev_test_rating, echo=FALSE}
+ghi_hrrp <- ghi_hrrp %>%
+  filter(!is.na(overall_rating))
+
+leveneTest(
+  readm_ratio ~ overall_rating, data = ghi_hrrp
+) %>%
+  print
+```
+
+```{r lev_test_measure, echo=FALSE}
+leveneTest(
+  readm_ratio ~ measure_id, data = ghi_hrrp
+) %>%
+  print
+```
+
+Separately, both have statistically significant variances across their categorical groups. Now we'll consider the homogeneity of variance including both variables and their interactions.
+
+```{r lev_test, echo=FALSE}
+leveneTest(
+  readm_ratio ~ overall_rating * measure_id, data = ghi_hrrp
+) %>%
+  print
+```
+
+Given that the p-value on Levene's test is less than .05, we can reject the null hypothesis that the variance is homogenous across the 30 cross-sections of our data. Now we can go ahead and perform a two-way analysis of variance of readmission ratios controlling for overall rating, the condition, and their interaction.
+
+First, we'll determine whether the interaction is significant.
+
+```{r run_f_test, echo=FALSE}
+anova_no_int <- aov(readm_ratio ~ overall_rating + measure_id, data = ghi_hrrp)
+anova_int <- aov(readm_ratio ~ overall_rating * measure_id, data = ghi_hrrp)
+anova(anova_int, anova_no_int)
+```
+
+Given that the F-test of the interaction model against the model without an interaction has a p-value of less than .05, we can conclude that the interaction has a significant effect on the variance across all the groups. But, because the variances across the groups are heterogeneous, we must run an ANOVA for an unbalanced sample, or a "type III" ANOVA. However, before runing that analysis it might be good to look at the normality of the residuals from the ANOVA including the interaction term to be thorough even though moderate deviations of normality wouldn't affect an ANOVA too badly. We'll run a Komogorov-Smirnov (KS) test because a Shapiro-Wilk test (the usual test) in R can only handle 5000 observations where we have `r nrow(ghi_hrrp)`.
+
+```{r norm_check, echo=FALSE, warning=FALSE}
+anova_res <- residuals(anova_int)
+
+ks.test(anova_res, y = "pnorm", alternative = "two.sided") %>% print
+
+ggplot(data = anova_res %>% tibble(res = .), aes(sample = res)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("Normality plot of residuals from ANOVA with interaction")
+
+ggplot(data = anova_res %>% tibble(res = .), aes(res)) +
+  geom_histogram(bins = 200) +
+  ggtitle("Histogram of residuals from ANOVA with interaction")
+```
+
+Both the KS test and the QQ plot indicate that there is non-normality in our residuals. However, a histogram shows that the residuals are fairly normally distributed. The QQ plot shows the normality is violated mainly at the extremes of the readmission ratio, or in the tails of the distribution. We can see, for example, that the distribution is right-skewed. For expediency we'll continue with the analysis knowing that there is a only a slight risk of false negatives in the ANOVA.
+
+```{r run_anova, echo=FALSE}
+Anova(anova_int, type = "III")
+```
+
+The ANOVA adjusting for an unbalanced sample indicates that overall rating, the condition, and their interaction all affect the readmission ratio. We'll now look at an interaction plot for this analysis.
+
+```{r int_plot, echo=FALSE}
+ghi_hrrp %>%
+  group_by(overall_rating, measure_id) %>%
+  summarise(
+    count = n(),
+    avg_rr = mean(readm_ratio),
+    se = sd(readm_ratio) / sqrt(count),
+    upper = avg_rr + se,
+    lower = avg_rr - se
+  ) %>%
+  ungroup %>%
+  ggplot(aes(measure_id, avg_rr, group = overall_rating)) +
+  geom_line(aes(color = overall_rating)) +
+  geom_point(aes(color = overall_rating)) +
+  geom_errorbar(
+    aes(ymin = lower, ymax = upper, color = overall_rating), 
+    width = 0.3
+  ) +
+  ggtitle("Interaction plot: condition and overall rating")
+```
+
+This plot confirms our previous conclusion that overall rating is related to the readmission ratio, however, the interaction only appears statistically significant for hip/knee hospitalizations between hospitals with overall ratings of 1 and 2. To check this we can run a Tukey Honest Significant Differences analysis. Because there would be over 200 rows in this analysis, we'll look at a table of the ratio of differences that are significant at the 95% confidence level.
+
+```{r tukey, echo=FALSE}
+tukey_int <- TukeyHSD(anova_int)
+tukey_signif <- tukey_int %>%
+  map(
+    ~ .x %>% 
+      data.frame %>% 
+      rownames_to_column("term") %>%
+      mutate(sig = ifelse(p.adj < 0.05, 1, 0)) %>%
+      summarise(pct_signif = (sum(sig) / n()) %>% percent)
+  ) %>%
+  set_names(c("overall_rating", "measure_id", "interaction"))
+
+print(tukey_signif)
+```
+
+All of the pairwise differences of the categories of overall ratings are statistically significant, 26.7% of the pairwise differences of the categories of overall ratings are statistically significant, and 63.2% of the pairwise differences of the categories of overall ratings are statistically significant. This suggests that the condition may be as important in determining the variance in readmission ratios.
