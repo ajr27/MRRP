@@ -23,18 +23,18 @@ Data.Medicare.gov data can be downloaded as flat files or through the Socrata Op
 
 ```{r dl_data}
 # Read in the readmission data via SODA using the RSocrata package
-hrrp_data <- read.socrata("https://data.medicare.gov/resource/kac9-a9fp.json")
+# hrrp_data <- read.socrata("https://data.medicare.gov/resource/kac9-a9fp.json")
 
 # Read in the general hospital information data
-ghi_data <- read.socrata("https://data.medicare.gov/resource/rbry-mqwu.json")
+# ghi_data <- read.socrata("https://data.medicare.gov/resource/rbry-mqwu.json")
 
 # Store the data locally to avoid having to ping the API repeatedly
 # write_rds(hrrp_data, "hrrp_data.rds")
 # write_rds(ghi_data, "ghi_data.rds")
 
 # Using the data that were saved above as pulling from the API will take longer.
-# hrrp_data <- read_rds("hrrp_data.rds")
-# ghi_data <- read_rds("ghi_data.rds")
+hrrp_data <- read_rds("hrrp_data.rds")
+ghi_data <- read_rds("ghi_data.rds")
 ```
 
 
@@ -80,10 +80,12 @@ hrrp_data <- hrrp_data %>%
   ) %>%
   
   # Keep only the important parts of the measure ID label names and convert it
-  # to a factor variable
+  # to a factor variable and add a column indicating whether the ratio is High 
+  # or Low
   mutate(
     measure_id = str_replace_all(measure_id, "^READM-30-", "") %>%
-      str_replace_all("-HRRP", "") %>% as_factor
+      str_replace_all("-HRRP", "") %>% as_factor,
+    ratio_lev = ifelse(readm_ratio >= 1, "Hi", "Lo") %>% as.factor
   ) %>%
   
   # Convert quantitative variables to numeric data type. This will turn any non-
@@ -126,25 +128,8 @@ ghi_data <- ghi_data %>%
     funs(as_factor)
   ) %>% 
   
-  # Extract longitude and latitude from the "location.coordinates" variable
-  separate(location.coordinates, c("long", "lat"), sep = ",") %>% 
-  mutate_at(
-    vars(long, lat), 
-    funs(
-      str_replace(., "[\\(|\\)]", "") %>% str_replace("c", "") %>% as.numeric
-    )
-  ) %>%
-  
   # Reorder the overall rating variable from 1 to 5
   mutate(
-    # long = map_dbl(
-    #   location.coordinates,
-    #   ~ .x[1][[1]][[1]][[1]]
-    # ),
-    # lat = map_dbl(
-    #   location.coordinates,
-    #   ~ .x %>% unlist %>% `[[`(2)
-    # ),
     overall_rating = fct_relevel(overall_rating, as.character(1:5))
   ) %>%
   
@@ -383,25 +368,26 @@ Below is leaflet map showing all of the hospitals in the Readmission Rate Reduct
 
 ```{r geo_dist, echo=FALSE, warning=FALSE}
 # Filter the merged data for COPD readmission ratios in observations with 
-# geographical coordinates and add a column indicating whether the ratio is High
-# or Low
+# geographical coordinates
 copd <- ghi_hrrp %>%
-  select(lat, long, readm_ratio, name, measure_id) %>%
-  filter(measure_id == "COPD", !is.na(lat), !is.na(long)) %>%
-  mutate(ratio_lev = ifelse(readm_ratio >= 1, "Hi", "Lo") %>% as.factor)
+  filter(measure_id == "COPD") %>%
+  drop_na(location.coordinates) %>%
+  mutate(
+    long = flatten_dbl(map(location.coordinates, ~ .x[1])),
+    lat = flatten_dbl(map(location.coordinates, ~ .x[2])),
+    ratio_lev = ifelse(readm_ratio >= 1, "Hiigh", "Low")
+  ) %>%
+  select(long, lat, readm_ratio, name, ratio_lev)
 
 # Create a spatial dataframe of the hospital coordinates and other values for 
 # the map
 copd_geo <- SpatialPointsDataFrame(
-  cbind(copd$long, copd$lat), 
-  data.frame(
-    ratio_lev = copd$ratio_lev, readm_ratio = copd$readm_ratio,
-    name = copd$name
-  )
+  copd %>% select(long, lat), 
+  copd %>% select(-c(long, lat))
 )
 
 # Make a color palette of red for Hi ratios and navy for Lo ratios
-cols <- colorFactor(c("red", "navy"), copd$ratio_lev)
+cols <- colorFactor(c("red", "navy"), copd_geo$ratio_lev)
 
 # Generate the map
 leaflet(data = copd_geo) %>%
