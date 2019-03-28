@@ -4,6 +4,7 @@ output:
   flexdashboard::flex_dashboard:
     orientation: rows
     vertical_layout: scroll
+    source_code: embed
 ---
 
 ```{r setup, include=FALSE}
@@ -133,7 +134,7 @@ hrrp_data <- hosp_data %>%
 Main
 ================================================================================
 
-Counts {data-width=1000}
+Counts
 --------------------------------------------------------------------------------
 
 ```{r gen_counts, echo=FALSE, include=FALSE}
@@ -193,7 +194,7 @@ my_gauge(counts %>% filter(status == "Exempt") %>% pull(pct_rprt))
 ```
 
 
-Row {data-width=1000}
+Violin Plots
 --------------------------------------------------------------------------------
 
 ### Violin Plot: HRRP
@@ -233,7 +234,7 @@ hosp_data %>%
 ```
 
 
-Row {data-width=1000}
+Metric Comparison Plots
 --------------------------------------------------------------------------------
 
 ```{r gen_comp_data, echo=FALSE, include=FALSE}
@@ -280,7 +281,7 @@ comp_plot_data %>%
 ```
 
 
-Row {data-height=500}
+Map
 --------------------------------------------------------------------------------
 ```{r gen_geo_data, echo=FALSE, include=FALSE}
 geo_data <- hrrp_data %>%
