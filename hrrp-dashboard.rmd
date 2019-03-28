@@ -327,5 +327,52 @@ Data
 
 ### HRRP Data
 ```{r hrrp_table}
-DT::datatable(hrrp_data, options = list(pageLength = 10, scrollX = TRUE))
+DT::datatable(
+  hrrp_data %>% 
+    select(name, state, status, mn_rr) %>%
+    mutate(mn_rr = round(mn_rr, 3)) %>%
+    set_names(
+      c("Hospital Name", "State", "HRRP Status", "Mean Readmission Ratio")
+    ), 
+  options = list(pageLength = 10, scrollX = TRUE)
+)
 ```
+
+
+Documentation {data-orientation=rows}
+================================================================================
+
+**Background**
+
+The Hospital Readmissions Reduction Program (HRRP) aims to reduce patient readmissions by reducing payments disbursed to hospitals with excessive readmissions that occur within 30 days of the initial visit. Payments can be reduced upto a cap of 3% for any Fee-For-Service hospital. The program tracks six specific conditions:
+
+- Acute Myocardial Infarction (AMI)
+- Chronic Obstructive Pulmonary Disease (COPD)
+- Heart Failure (HF)
+- Pneumonia
+- Coronary Artery Bypass Graft (CABG) Surgery
+- Elective Primary Total Hip Arthroplasty and/or Total Knee Arthroplasty (THA/TKA)
+
+
+**Calculating Readmission Ratios**
+
+Excess readmissions are measured with a ratio for each type of condition. The ratio is calculated by dividing the number of "predicted" 30-day readmissions for a hospital for the given condition by the number that is "expected" for the same hospital and condition.
+
+<p style="text-align:center"><font size="18">
+$\frac{Predicted\:Readmissions}{Expected\:Readmissions}$
+</font></p>
+
+Total "predicted" 30-day readmissions is the number of readmissions that would be anticipated in a particular hospital adjusted for risk using the demographics of the area covered by the hospital. Total "expected" 30-day readmissions is the number of readmissions that would be expected if the same patients had been treated at an "average" hospital.
+
+
+**Resources**
+
+Description of the HRRP from the Centers for Medicare & Medicaid Services ---
+<a href="https://www.cms.gov/Medicare/Medicare-Fee-for-Service-Payment/AcuteInpatientPPS/Readmissions-Reduction-Program.html">
+https://www.cms.gov/Medicare/Medicare-Fee-for-Service-Payment/AcuteInpatientPPS/Readmissions-Reduction-Program.html</a>
+
+Data downloads --- 
+<a href="https://data.medicare.gov/Hospital-Compare/Hospital-Readmissions-Reduction-Program/9n3s-kdb3">https://data.medicare.gov/Hospital-Compare/Hospital-Readmissions-Reduction-Program/9n3s-kdb3</a>
+
+Description of computation methods from the Agency for Healthcare Research and Quality --- 
+<a href="https://www.ahrq.gov/professionals/systems/hospital/red/toolkit/redtool-30day.html">https://www.ahrq.gov/professionals/systems/hospital/red/toolkit/redtool-30day.html</a>
